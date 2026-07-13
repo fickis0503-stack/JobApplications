@@ -99,7 +99,7 @@ function App() {
   const [syncState, setSyncState] = useState("connecting"); // connecting | live | error
   const [calMode, setCalMode] = useState("month"); // month | week
   const [selectedDate, setSelectedDate] = useState(null);
-  const [modal, setModal] = useState(null); // null | {mode:'new'|'edit', posting}
+  const [modal, setModal] = useState(null); // null | {mode:'view'|'new'|'edit', posting}
   const [toast, setToast] = useState("");
   const rowRef = useRef(null);
 
@@ -199,12 +199,21 @@ function App() {
 
           <PostingTable
             postings={selectedDate ? postings.filter((p) => p.postedAt === selectedDate) : postings}
-            onOpen={(p) => setModal({ mode: "edit", posting: p })}
+            onOpen={(p) => setModal({ mode: "view", posting: p })}
           />
         </>
       )}
 
-      {modal && (
+      {modal && modal.mode === "view" && (
+        <PostingDetail
+          posting={modal.posting}
+          onClose={() => setModal(null)}
+          onEdit={() => setModal({ mode: "edit", posting: modal.posting })}
+          onDelete={deletePosting}
+        />
+      )}
+
+      {modal && (modal.mode === "new" || modal.mode === "edit") && (
         <PostingModal
           mode={modal.mode} posting={modal.posting}
           onClose={() => setModal(null)}
@@ -340,6 +349,80 @@ function PostingTable({ postings, onOpen }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Detail (읽기 모드)
+// ══════════════════════════════════════════════════════════════
+function PostingDetail({ posting, onClose, onEdit, onDelete }) {
+  if (!posting) return null;
+  const fmtSize = (b) => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + "MB" : Math.round(b / 1024) + "KB";
+
+  const downloadFile = () => {
+    try {
+      const [head, b64] = posting.fileData.split(",");
+      const mime = (head.match(/:(.*?);/) || [, "application/octet-stream"])[1];
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const blob = new Blob([arr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = posting.fileName || "attachment";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch { window.open(posting.fileData, "_blank"); }
+  };
+
+  const Field = ({ label, value }) =>
+    value ? (
+      <div style={S.rfield}>
+        <div style={S.rlabel}>{label}</div>
+        <div style={S.rvalue}>{value}</div>
+      </div>
+    ) : null;
+
+  return (
+    <div style={S.modalOverlay} onClick={onClose}>
+      <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={S.modalHead}>
+          <span>공고 상세</span>
+          <button style={S.modalX} onClick={onClose}>✕</button>
+        </div>
+
+        <div style={S.modalBody}>
+          <div style={S.rmeta}>
+            {posting.company && <span style={S.rcat}>{posting.company}</span>}
+            {(posting.jobTypes || []).map((t) => <span key={t} style={S.rtag}>{t}</span>)}
+          </div>
+          <h2 style={S.rtitle}>{posting.title}</h2>
+          <div style={S.rdates}>
+            <span>등록일시 {fmtDate(posting.postedAt)}</span>
+            {posting.deadlineAt && <span style={S.duetag}>마감 {fmtDate(posting.deadlineAt)}</span>}
+          </div>
+
+          <Field label="공고 상세 내용" value={posting.description} />
+
+          {posting.fileName && (
+            <div style={S.rfield}>
+              <div style={S.rlabel}>지원서 첨부</div>
+              <div style={S.fileItem}>
+                <span style={{ flex: 1, fontWeight: 600, wordBreak: "break-all" }}>{posting.fileName}</span>
+                <span style={{ color: "#8c8c8c", fontSize: 12 }}>{fmtSize(posting.fileSize)}</span>
+                <button style={S.fileActionBtn} onClick={downloadFile}>받기</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={S.modalFoot}>
+          <button style={S.btnPrimary} onClick={onEdit}>수정</button>
+          <button style={S.btnDanger} onClick={() => { if (window.confirm("이 공고를 삭제할까요?")) onDelete(posting.id); }}>삭제</button>
+          <button style={S.btnGhost} onClick={onClose}>닫기</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -530,6 +613,16 @@ const S = {
   modalX: { background:"none", border:"none", fontSize:16, cursor:"pointer" },
   modalBody: { padding:"18px 20px" },
   modalFoot: { display:"flex", gap:9, padding:"16px 20px", borderTop:"1px solid #e6e6e6" },
+
+  rmeta: { display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", marginBottom:10 },
+  rcat: { background:INK, color:"#fff", padding:"3px 10px", fontSize:12, fontWeight:700, fontFamily:"'JetBrains Mono',monospace" },
+  rtag: { border:`1px solid ${INK}`, color:INK, padding:"2px 9px", fontSize:11.5, fontWeight:600, fontFamily:"'JetBrains Mono',monospace" },
+  rtitle: { fontSize:21, fontWeight:800, letterSpacing:"-0.02em", margin:"0 0 8px", lineHeight:1.3 },
+  rdates: { display:"flex", gap:10, alignItems:"center", fontSize:12.5, color:"#8c8c8c", fontFamily:"'JetBrains Mono',monospace", marginBottom:6 },
+  duetag: { border:`1px solid ${INK}`, color:INK, padding:"2px 8px", fontSize:11, fontWeight:700 },
+  rfield: { borderTop:"1px solid #e6e6e6", padding:"14px 0" },
+  rlabel: { fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.06em", color:"#8c8c8c", marginBottom:6, fontFamily:"'JetBrains Mono',monospace" },
+  rvalue: { fontSize:14.5, lineHeight:1.65, whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"'Cormorant Garamond',serif" },
 
   label: { display:"block", fontSize:11.5, fontWeight:800, margin:"16px 0 6px", letterSpacing:"0.04em", textTransform:"uppercase", fontFamily:"'JetBrains Mono',monospace" },
   hint: { fontWeight:500, color:"#8c8c8c", marginLeft:6, textTransform:"none", letterSpacing:0 },
