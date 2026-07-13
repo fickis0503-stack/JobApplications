@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>지원서 기록</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<style>
+  @font-face {
+    font-family: 'Pretendard';
+    src: url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/woff2/Pretendard-Regular.woff2') format('woff2');
+    font-weight: 400; font-display: swap;
+  }
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; padding:0; background:#fff; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ══════════════════════════════════════════════════════════════
+// CONFIG — 여기 4개 값만 채우면 됩니다
+// ══════════════════════════════════════════════════════════════
+const CONFIG = {
+  SUPABASE_URL: "https://ewgmtccwxonljitmsplh.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_4UReb9Aw-ZjL-RHdu6dZbQ_hphBd5xm", // Supabase publishable key (client-safe)
+  SPACE_KEY: "apps_xt8kl1oxgn8j7vyf",                       // 이 사이트 전용 공간 키 (임의 문자열, 원하면 변경 가능)
+  PASSWORD: "haeunchoi0503",                                      // 접속 비밀번호
+  TABLE: "job_apps",
+};
+
+const sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+
+// ── Helpers ────────────────────────────────────────────────────
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+};
+const WD = ["일","월","화","수","목","금","토"];
+const JOB_TYPES = ["정규직","채용연계인턴","체험형인턴","계약직","병역특례","기타"];
+
+const fmtDate = (s) => s ? s.replaceAll("-", ".") : "-";
+
+// ══════════════════════════════════════════════════════════════
+// Password Gate
+// ══════════════════════════════════════════════════════════════
+function Gate({ onUnlock }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(false);
+  const submit = () => {
+    if (pw === CONFIG.PASSWORD) onUnlock();
+    else { setErr(true); setPw(""); }
+  };
+  return (
+    <div style={gateStyles.wrap}>
+      <div style={gateStyles.card}>
+        <div style={gateStyles.wordmark}>APPLICATION LOG</div>
+        <div style={gateStyles.sub}>지원서 기록 보관소</div>
+        <input
+          autoFocus type="password" value={pw} placeholder="PASSWORD"
+          style={{ ...gateStyles.input, borderColor: err ? "#c00" : "#0d0d0d" }}
+          onChange={(e) => { setPw(e.target.value); setErr(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        />
+        {err && <div style={gateStyles.err}>비밀번호가 올바르지 않습니다</div>}
+        <button style={gateStyles.btn} onClick={submit}>입장</button>
+      </div>
+    </div>
+  );
+}
+const gateStyles = {
+  wrap: { minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#0d0d0d", fontFamily:"'JetBrains Mono',monospace" },
+  card: { width:320, textAlign:"center" },
+  wordmark: { color:"#fff", fontSize:20, fontWeight:800, letterSpacing:"0.12em" },
+  sub: { color:"#c3d9f3", fontSize:12, letterSpacing:"0.08em", marginTop:8, marginBottom:28 },
+  input: { width:"100%", background:"transparent", border:"1px solid", color:"#fff", padding:"12px 14px", fontSize:14, fontFamily:"inherit", letterSpacing:"0.05em", outline:"none", textAlign:"center" },
+  err: { color:"#e88", fontSize:11, marginTop:8, letterSpacing:"0.03em" },
+  btn: { width:"100%", marginTop:14, background:"#c3d9f3", border:"none", color:"#0d0d0d", padding:"12px 14px", fontSize:13, fontWeight:800, letterSpacing:"0.08em", cursor:"pointer", fontFamily:"inherit" },
+};
+
+// ══════════════════════════════════════════════════════════════
+// Main App
+// ══════════════════════════════════════════════════════════════
+function App() {
+  const [unlocked, setUnlocked] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [postings, setPostings] = useState([]);
+  const [syncState, setSyncState] = useState("connecting"); // connecting | live | error
+  const [calMode, setCalMode] = useState("month"); // month | week
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [modal, setModal] = useState(null); // null | {mode:'new'|'edit', posting}
+  const [toast, setToast] = useState("");
+  const rowRef = useRef(null);
+
+  const showToast = (m) => { setToast(m); setTimeout(() => setToast(""), 1800); };
+
+  // ── load + realtime subscribe ──────────────────────────────
+  useEffect(() => {
+    if (!unlocked) return;
+    let channel;
+    (async () => {
+      setLoading(true);
+      try {
+        let { data, error } = await sb.from(CONFIG.TABLE).select("data").eq("space_key", CONFIG.SPACE_KEY).maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          const init = { postings: [] };
+          const { error: insErr } = await sb.from(CONFIG.TABLE).insert({ space_key: CONFIG.SPACE_KEY, data: init });
+          if (insErr) throw insErr;
+          data = { data: init };
+        }
+        setPostings(data.data.postings || []);
+        setSyncState("live");
+      } catch (e) {
+        console.error(e);
+        setSyncState("error");
+      } finally { setLoading(false); }
+
+      channel = sb.channel("job_apps_" + CONFIG.SPACE_KEY)
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: CONFIG.TABLE, filter: `space_key=eq.${CONFIG.SPACE_KEY}` },
+          (payload) => {
+            if (payload.new && payload.new.data) setPostings(payload.new.data.postings || []);
+          })
+        .subscribe((status) => {
+          if (status === "SUBSCRIBED") setSyncState("live");
+        });
+    })();
+    return () => { if (channel) sb.removeChannel(channel); };
+  }, [unlocked]);
+
+  // ── persist ─────────────────────────────────────────────────
+  const persist = useCallback(async (next) => {
+    setPostings(next);
+    try {
+      const { error } = await sb.from(CONFIG.TABLE)
+        .update({ data: { postings: next }, updated_at: new Date().toISOString() })
+        .eq("space_key", CONFIG.SPACE_KEY);
+      if (error) throw error;
+    } catch (e) {
+      console.error(e);
+      showToast("저장 실패 — 연결을 확인하세요");
+    }
+  }, []);
+
+  const savePosting = useCallback((p) => {
+    const exists = postings.some((x) => x.id === p.id);
+    const next = exists ? postings.map((x) => x.id === p.id ? p : x) : [{ ...p, createdAt: Date.now() }, ...postings];
+    persist(next);
+    showToast(exists ? "수정 완료" : "등록 완료");
+    setModal(null);
+  }, [postings, persist]);
+
+  const deletePosting = useCallback((id) => {
+    persist(postings.filter((x) => x.id !== id));
+    showToast("삭제 완료");
+    setModal(null);
+  }, [postings, persist]);
+
+  if (!unlocked) return <Gate onUnlock={() => setUnlocked(true)} />;
+
+  return (
+    <div style={S.wrap}>
+      <style>{globalCss}</style>
+      <div style={S.topbar}>
+        <span style={S.brand}>APPLICATION LOG</span>
+        <span style={S.syncTag}>
+          <span style={{ ...S.syncDot, background: syncState === "live" ? "#3ba55d" : syncState === "error" ? "#c00" : "#c3a300" }} />
+          {syncState === "live" ? "실시간 연결됨" : syncState === "error" ? "연결 오류" : "연결 중…"}
+        </span>
+      </div>
+
+      {loading ? (
+        <div style={S.empty}>불러오는 중…</div>
+      ) : (
+        <>
+          <CalendarBlock
+            postings={postings} mode={calMode} setMode={setCalMode}
+            selectedDate={selectedDate} setSelectedDate={setSelectedDate}
+          />
+
+          <div style={S.listHeadRow}>
+            <h2 style={S.sec}>
+              공고 목록 {selectedDate ? `— ${fmtDate(selectedDate)}` : ""}
+              {selectedDate && <button style={S.clearFilter} onClick={() => setSelectedDate(null)}>전체보기 ✕</button>}
+            </h2>
+            <button style={S.addBtn} onClick={() => setModal({ mode: "new" })}>+ 공고 등록</button>
+          </div>
+
+          <PostingTable
+            postings={selectedDate ? postings.filter((p) => p.postedAt === selectedDate) : postings}
+            onOpen={(p) => setModal({ mode: "edit", posting: p })}
+          />
+        </>
+      )}
+
+      {modal && (
+        <PostingModal
+          mode={modal.mode} posting={modal.posting}
+          onClose={() => setModal(null)}
+          onSave={savePosting}
+          onDelete={deletePosting}
+        />
+      )}
+
+      {toast && <div style={S.toast}>{toast}</div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Calendar
+// ══════════════════════════════════════════════════════════════
+function CalendarBlock({ postings, mode, setMode, selectedDate, setSelectedDate }) {
+  const [cur, setCur] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth(), d: d.getDate() }; });
+  const today = todayStr();
+
+  const countByDate = useMemo(() => {
+    const m = {};
+    for (const p of postings) if (p.postedAt) m[p.postedAt] = (m[p.postedAt] || 0) + 1;
+    return m;
+  }, [postings]);
+
+  const fmt = (y, m, d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+
+  const monthCells = useMemo(() => {
+    const first = new Date(cur.y, cur.m, 1);
+    const startWd = first.getDay();
+    const days = new Date(cur.y, cur.m + 1, 0).getDate();
+    const arr = [];
+    for (let i = 0; i < startWd; i++) arr.push(null);
+    for (let d = 1; d <= days; d++) arr.push(d);
+    while (arr.length % 7 !== 0) arr.push(null);
+    return arr;
+  }, [cur.y, cur.m]);
+
+  const weekCells = useMemo(() => {
+    const base = new Date(cur.y, cur.m, cur.d);
+    const wd = base.getDay();
+    const start = new Date(base); start.setDate(base.getDate() - wd);
+    return Array.from({ length: 7 }, (_, i) => {
+      const dd = new Date(start); dd.setDate(start.getDate() + i);
+      return { y: dd.getFullYear(), m: dd.getMonth(), d: dd.getDate() };
+    });
+  }, [cur.y, cur.m, cur.d]);
+
+  const shiftMonth = (n) => setCur((c) => { const nd = new Date(c.y, c.m + n, 1); return { y: nd.getFullYear(), m: nd.getMonth(), d: 1 }; });
+  const shiftWeek = (n) => setCur((c) => { const nd = new Date(c.y, c.m, c.d + n * 7); return { y: nd.getFullYear(), m: nd.getMonth(), d: nd.getDate() }; });
+  const goToday = () => { const d = new Date(); setCur({ y: d.getFullYear(), m: d.getMonth(), d: d.getDate() }); };
+
+  const pick = (ds) => setSelectedDate(ds === selectedDate ? null : ds);
+
+  return (
+    <div>
+      <div style={S.calHead}>
+        <div style={S.calModeToggle}>
+          <button style={{ ...S.modeBtn, ...(mode === "week" ? S.modeBtnActive : {}) }} onClick={() => setMode("week")}>주</button>
+          <button style={{ ...S.modeBtn, ...(mode === "month" ? S.modeBtnActive : {}) }} onClick={() => setMode("month")}>월</button>
+        </div>
+        <span style={S.calTitle}>
+          {mode === "month" ? `${cur.y}. ${String(cur.m+1).padStart(2,"0")}` : `${weekCells[0].y}.${String(weekCells[0].m+1).padStart(2,"0")}.${String(weekCells[0].d).padStart(2,"0")} – ${String(weekCells[6].m+1).padStart(2,"0")}.${String(weekCells[6].d).padStart(2,"0")}`}
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={S.navBtn} onClick={() => mode === "month" ? shiftMonth(-1) : shiftWeek(-1)}>‹</button>
+          <button style={S.todayBtn} onClick={goToday}>오늘</button>
+          <button style={S.navBtn} onClick={() => mode === "month" ? shiftMonth(1) : shiftWeek(1)}>›</button>
+        </div>
+      </div>
+
+      <div style={S.calGrid}>
+        {WD.map((w, i) => <div key={w} style={{ ...S.calWd, color: i === 0 ? "#0d0d0d" : "#8c8c8c" }}>{w}</div>)}
+        {mode === "month" && monthCells.map((d, i) => {
+          if (!d) return <div key={i} style={S.calCellEmpty} />;
+          const ds = fmt(cur.y, cur.m, d);
+          const cnt = countByDate[ds] || 0;
+          return (
+            <button key={i} style={{ ...S.calCell, ...(ds === today ? S.calCellToday : {}), ...(ds === selectedDate ? S.calCellSelected : {}) }} onClick={() => pick(ds)}>
+              <span style={S.calDnum}>{d}</span>
+              {cnt > 0 && <span style={S.calBadge}>{cnt}건</span>}
+            </button>
+          );
+        })}
+        {mode === "week" && weekCells.map((c, i) => {
+          const ds = fmt(c.y, c.m, c.d);
+          const cnt = countByDate[ds] || 0;
+          return (
+            <button key={i} style={{ ...S.calCell, minHeight: 96, ...(ds === today ? S.calCellToday : {}), ...(ds === selectedDate ? S.calCellSelected : {}) }} onClick={() => pick(ds)}>
+              <span style={S.calDnum}>{c.d}</span>
+              {cnt > 0 && <span style={S.calBadge}>{cnt}건</span>}
+            </button>
+          );
+        })}
+      </div>
+      <p style={S.calHint}>공고 게재일(등록일시) 기준입니다. 날짜를 누르면 아래 목록이 해당 날짜로 필터링됩니다.</p>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Table
+// ══════════════════════════════════════════════════════════════
+function PostingTable({ postings, onOpen }) {
+  const sorted = useMemo(() => [...postings].sort((a, b) => (b.postedAt || "").localeCompare(a.postedAt || "")), [postings]);
+  if (sorted.length === 0) {
+    return <div style={S.empty}>등록된 공고가 없어요.<br />위의 [+ 공고 등록] 버튼으로 첫 공고를 추가해 보세요.</div>;
+  }
+  return (
+    <div style={S.tableWrap}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>번호</th>
+            <th style={S.th}>회사명</th>
+            <th style={S.th}>채용구분</th>
+            <th style={{ ...S.th, textAlign: "left" }}>채용명</th>
+            <th style={S.th}>등록일시</th>
+            <th style={S.th}>마감일시</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p, i) => (
+            <tr key={p.id} style={S.tr} onClick={() => onOpen(p)}>
+              <td style={S.td}>{sorted.length - i}</td>
+              <td style={S.td}>{p.company || "-"}</td>
+              <td style={S.td}>{(p.jobTypes || []).join(", ") || "-"}</td>
+              <td style={{ ...S.td, textAlign: "left", fontWeight: 700 }}>{p.title || "(제목 없음)"}</td>
+              <td style={S.td}>{fmtDate(p.postedAt)}</td>
+              <td style={S.td}>{fmtDate(p.deadlineAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Add / Edit Modal
+// ══════════════════════════════════════════════════════════════
+function PostingModal({ mode, posting, onClose, onSave, onDelete }) {
+  const isNew = mode === "new";
+  const [form, setForm] = useState(() => ({
+    id: posting?.id || uid(),
+    company: posting?.company || "",
+    jobTypes: posting?.jobTypes || [],
+    title: posting?.title || "",
+    postedAt: posting?.postedAt || todayStr(),
+    deadlineAt: posting?.deadlineAt || "",
+    description: posting?.description || "",
+    fileName: posting?.fileName || "",
+    fileData: posting?.fileData || "",
+    fileSize: posting?.fileSize || 0,
+  }));
+  const [busy, setBusy] = useState("");
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const toggleType = (t) => setForm((f) => ({ ...f, jobTypes: f.jobTypes.includes(t) ? f.jobTypes.filter((x) => x !== t) : [...f.jobTypes, t] }));
+
+  const onUpload = async (file) => {
+    if (!file) return;
+    if (file.size > 3.7 * 1024 * 1024) {
+      setBusy("파일이 너무 커요 (약 3.5MB 이하만 가능)"); setTimeout(() => setBusy(""), 2800); return;
+    }
+    setBusy("첨부 중…");
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error("read fail"));
+        r.readAsDataURL(file);
+      });
+      setForm((f) => ({ ...f, fileName: file.name, fileData: dataUrl, fileSize: file.size }));
+      setBusy("");
+    } catch { setBusy("첨부 실패"); setTimeout(() => setBusy(""), 2200); }
+  };
+
+  const removeFile = () => setForm((f) => ({ ...f, fileName: "", fileData: "", fileSize: 0 }));
+
+  const downloadFile = () => {
+    try {
+      const [head, b64] = form.fileData.split(",");
+      const mime = (head.match(/:(.*?);/) || [, "application/octet-stream"])[1];
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const blob = new Blob([arr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = form.fileName || "attachment";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch { window.open(form.fileData, "_blank"); }
+  };
+
+  const fmtSize = (b) => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + "MB" : Math.round(b / 1024) + "KB";
+  const canSave = form.company.trim() && form.title.trim();
+
+  return (
+    <div style={S.modalOverlay} onClick={onClose}>
+      <div style={S.modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={S.modalHead}>
+          <span>{isNew ? "공고 등록" : "공고 수정"}</span>
+          <button style={S.modalX} onClick={onClose}>✕</button>
+        </div>
+
+        <div style={S.modalBody}>
+          <label style={S.label}>회사명</label>
+          <input style={S.input} placeholder="예: 현대엔지비" value={form.company} onChange={set("company")} />
+
+          <label style={S.label}>채용구분 <span style={S.hint}>중복 선택 가능</span></label>
+          <div style={S.tagRow}>
+            {JOB_TYPES.map((t) => (
+              <button key={t} type="button"
+                style={{ ...S.tagBtn, ...(form.jobTypes.includes(t) ? S.tagBtnActive : {}) }}
+                onClick={() => toggleType(t)}>{t}</button>
+            ))}
+          </div>
+
+          <label style={S.label}>채용명</label>
+          <input style={S.input} placeholder="예: 2026년 하반기 체험형 인턴 채용" value={form.title} onChange={set("title")} />
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={S.label}>등록일시</label>
+              <input style={S.input} type="date" value={form.postedAt} onChange={set("postedAt")} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={S.label}>마감일시 <span style={S.hint}>선택</span></label>
+              <input style={S.input} type="date" value={form.deadlineAt} onChange={set("deadlineAt")} />
+            </div>
+          </div>
+
+          <label style={S.label}>공고 상세 내용</label>
+          <textarea style={S.textarea} placeholder="공고 원문, 자격요건, 우대사항, 지원 절차 등을 자유롭게 적어두세요."
+            value={form.description} onChange={set("description")} />
+
+          <label style={S.label}>지원서 첨부 <span style={S.hint}>PDF·문서 등, 최대 3.5MB</span></label>
+          {!form.fileName ? (
+            <label style={S.fileBtn}>
+              파일 선택
+              <input type="file" style={{ display: "none" }} onChange={(e) => { onUpload(e.target.files[0]); e.target.value = ""; }} />
+            </label>
+          ) : (
+            <div style={S.fileItem}>
+              <span style={{ flex: 1, fontWeight: 600, wordBreak: "break-all" }}>{form.fileName}</span>
+              <span style={{ color: "#8c8c8c", fontSize: 12 }}>{fmtSize(form.fileSize)}</span>
+              <button style={S.fileActionBtn} onClick={downloadFile}>받기</button>
+              <button style={S.fileActionBtn} onClick={removeFile}>삭제</button>
+            </div>
+          )}
+          {busy && <p style={{ fontSize: 12, marginTop: 8, fontWeight: 600 }}>{busy}</p>}
+        </div>
+
+        <div style={S.modalFoot}>
+          <button style={S.btnPrimary} disabled={!canSave} onClick={() => onSave(form)}>저장</button>
+          {!isNew && <button style={S.btnDanger} onClick={() => { if (window.confirm("이 공고를 삭제할까요?")) onDelete(form.id); }}>삭제</button>}
+          <button style={S.btnGhost} onClick={onClose}>취소</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Styles (Bugatti-inspired: black/white, JetBrains Mono, ice-blue accent)
+// ══════════════════════════════════════════════════════════════
+const globalCss = `
+  * { box-sizing:border-box; }
+  ::placeholder { color:#b0b0b0; }
+  @media (prefers-reduced-motion: reduce){ * { animation:none !important; transition:none !important; } }
+`;
+
+const ACCENT = "#c3d9f3";
+const INK = "#0d0d0d";
+
+const S = {
+  wrap: { fontFamily:"'Pretendard',-apple-system,'Apple SD Gothic Neo',sans-serif", background:"#fff", color:INK, minHeight:"100vh", maxWidth:860, margin:"0 auto", padding:"0 20px 80px" },
+  topbar: { position:"sticky", top:0, zIndex:5, background:"#fff", padding:"24px 0 14px", borderBottom:`2px solid ${INK}`, display:"flex", alignItems:"baseline", gap:12, fontFamily:"'JetBrains Mono',monospace" },
+  brand: { fontSize:19, fontWeight:800, letterSpacing:"0.08em" },
+  syncTag: { marginLeft:"auto", fontSize:10.5, color:"#8c8c8c", display:"flex", alignItems:"center", gap:6, textTransform:"uppercase", letterSpacing:"0.06em" },
+  syncDot: { width:6, height:6, borderRadius:"50%", flexShrink:0 },
+
+  sec: { fontSize:12, textTransform:"uppercase", letterSpacing:"0.14em", fontWeight:800, margin:0, fontFamily:"'JetBrains Mono',monospace", display:"flex", alignItems:"center", gap:10 },
+  listHeadRow: { display:"flex", alignItems:"center", justifyContent:"space-between", margin:"30px 0 14px", borderBottom:`1px solid #e6e6e6`, paddingBottom:10, flexWrap:"wrap", gap:10 },
+  clearFilter: { background:"none", border:`1px solid ${INK}`, fontSize:10.5, fontFamily:"'JetBrains Mono',monospace", padding:"2px 8px", cursor:"pointer" },
+  addBtn: { background:INK, color:"#fff", border:"none", padding:"9px 16px", fontSize:12.5, fontWeight:700, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace", letterSpacing:"0.03em" },
+
+  empty: { textAlign:"center", color:"#8c8c8c", padding:"50px 0", fontSize:14, lineHeight:1.7 },
+
+  // Calendar
+  calHead: { display:"flex", alignItems:"center", gap:12, marginTop:22, marginBottom:12, flexWrap:"wrap" },
+  calModeToggle: { display:"flex", border:`1px solid ${INK}` },
+  modeBtn: { background:"#fff", border:"none", padding:"6px 12px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  modeBtnActive: { background:INK, color:"#fff" },
+  calTitle: { fontSize:16, fontWeight:800, letterSpacing:"-0.01em", fontFamily:"'JetBrains Mono',monospace" },
+  navBtn: { background:"none", border:`1px solid ${INK}`, width:28, height:28, cursor:"pointer", fontWeight:700 },
+  todayBtn: { background:"none", border:`1px solid ${INK}`, padding:"0 10px", fontSize:11.5, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  calGrid: { display:"grid", gridTemplateColumns:"repeat(7,1fr)", borderTop:"1px solid #e6e6e6", borderLeft:"1px solid #e6e6e6" },
+  calWd: { textAlign:"center", fontSize:11, fontWeight:700, padding:"7px 0", borderRight:"1px solid #e6e6e6", borderBottom:"1px solid #e6e6e6", fontFamily:"'JetBrains Mono',monospace" },
+  calCellEmpty: { minHeight:64, background:"#fafafa", borderRight:"1px solid #e6e6e6", borderBottom:"1px solid #e6e6e6" },
+  calCell: { minHeight:64, background:"#fff", border:"none", borderRight:"1px solid #e6e6e6", borderBottom:"1px solid #e6e6e6", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:4, padding:4, fontFamily:"'Pretendard',sans-serif" },
+  calCellToday: { outline:`2px solid ${INK}`, outlineOffset:-2 },
+  calCellSelected: { background:ACCENT },
+  calDnum: { fontSize:12.5, fontWeight:600 },
+  calBadge: { fontSize:9.5, fontWeight:700, background:INK, color:"#fff", padding:"1px 6px" },
+  calHint: { fontSize:11.5, color:"#8c8c8c", marginTop:10, lineHeight:1.5 },
+
+  // Table
+  tableWrap: { overflowX:"auto", border:"1px solid #e6e6e6" },
+  table: { width:"100%", borderCollapse:"collapse", fontSize:13, fontFamily:"'JetBrains Mono',monospace" },
+  th: { textAlign:"center", fontSize:10.5, textTransform:"uppercase", letterSpacing:"0.06em", color:"#8c8c8c", fontWeight:700, padding:"10px 8px", borderBottom:`2px solid ${INK}`, whiteSpace:"nowrap" },
+  tr: { cursor:"pointer", borderBottom:"1px solid #e6e6e6" },
+  td: { textAlign:"center", padding:"11px 8px", fontFamily:"'Pretendard',sans-serif", fontSize:13.5, whiteSpace:"nowrap" },
+
+  toast: { position:"fixed", bottom:26, left:"50%", transform:"translateX(-50%)", background:INK, color:"#fff", padding:"10px 18px", fontSize:13, fontWeight:600, zIndex:30, fontFamily:"'JetBrains Mono',monospace" },
+
+  // Modal
+  modalOverlay: { position:"fixed", inset:0, background:"rgba(13,13,13,0.55)", zIndex:40, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"40px 16px", overflowY:"auto" },
+  modalCard: { background:"#fff", width:"100%", maxWidth:560, border:`2px solid ${INK}`, marginBottom:40 },
+  modalHead: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 20px", borderBottom:`1px solid #e6e6e6`, fontWeight:800, fontFamily:"'JetBrains Mono',monospace", fontSize:14, letterSpacing:"0.04em" },
+  modalX: { background:"none", border:"none", fontSize:16, cursor:"pointer" },
+  modalBody: { padding:"18px 20px" },
+  modalFoot: { display:"flex", gap:9, padding:"16px 20px", borderTop:"1px solid #e6e6e6" },
+
+  label: { display:"block", fontSize:11.5, fontWeight:800, margin:"16px 0 6px", letterSpacing:"0.04em", textTransform:"uppercase", fontFamily:"'JetBrains Mono',monospace" },
+  hint: { fontWeight:500, color:"#8c8c8c", marginLeft:6, textTransform:"none", letterSpacing:0 },
+  input: { width:"100%", border:`1px solid ${INK}`, padding:"10px 12px", fontSize:14.5, fontFamily:"'Pretendard',sans-serif", background:"#fff", color:INK },
+  textarea: { width:"100%", minHeight:160, border:`1px solid ${INK}`, padding:"10px 12px", fontSize:14, fontFamily:"'Cormorant Garamond',serif", lineHeight:1.6, resize:"vertical" },
+  tagRow: { display:"flex", gap:6, flexWrap:"wrap" },
+  tagBtn: { border:`1px solid ${INK}`, background:"#fff", color:INK, padding:"6px 12px", fontSize:12, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  tagBtnActive: { background:INK, color:"#fff" },
+  fileBtn: { display:"inline-block", border:`1px dashed ${INK}`, padding:"10px 16px", fontSize:13, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  fileItem: { display:"flex", alignItems:"center", gap:10, border:`1px solid #e6e6e6`, borderLeft:`3px solid ${INK}`, padding:"10px 12px" },
+  fileActionBtn: { background:"none", border:"1px solid #e6e6e6", fontSize:11.5, fontWeight:600, padding:"3px 9px", cursor:"pointer" },
+
+  btnPrimary: { background:INK, color:"#fff", border:"none", padding:"10px 20px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  btnGhost: { background:"#fff", color:INK, border:`1px solid ${INK}`, padding:"10px 20px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+  btnDanger: { background:"#fff", color:INK, border:`1px dashed ${INK}`, padding:"10px 20px", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"'JetBrains Mono',monospace" },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
