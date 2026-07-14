@@ -31,6 +31,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBpbWxvcXByZWdkY3Jveml3a2twIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM5MTE0NjUsImV4cCI6MjA5OTQ4NzQ2NX0.yaOJFAn9wsLYey6t9ufk33ExVccXKAlppS2_-cJnQ2w", // Supabase legacy anon key (client-safe)
   SPACE_KEY: "apps_xt8kl1oxgn8j7vyf",                       // 이 사이트 전용 공간 키 (임의 문자열, 원하면 변경 가능)
   PASSWORD: "changeme",                                      // 접속 비밀번호
+  ADMIN_PASSWORD: "adminchangeme",                            // 공고 등록·수정·삭제 시 필요한 개발자(관리자) 비밀번호
   TABLE: "job_apps",
 };
 
@@ -85,6 +86,43 @@ const gateStyles = {
 };
 
 // ══════════════════════════════════════════════════════════════
+// Admin Gate — 공고 등록·수정·삭제 시 필요한 별도 비밀번호 확인창
+// ══════════════════════════════════════════════════════════════
+function AdminGate({ onSuccess, onCancel }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState(false);
+  const submit = () => {
+    if (pw === CONFIG.ADMIN_PASSWORD) onSuccess();
+    else { setErr(true); setPw(""); }
+  };
+  return (
+    <div style={S.detailOverlay} onClick={onCancel}>
+      <div style={adminGateStyles.card} onClick={(e) => e.stopPropagation()}>
+        <div style={adminGateStyles.title}>관리자 권한 확인</div>
+        <div style={adminGateStyles.sub}>공고 등록·수정·삭제는 관리자 비밀번호가 필요해요.</div>
+        <input
+          autoFocus type="password" value={pw} placeholder="ADMIN PASSWORD"
+          style={{ ...adminGateStyles.input, borderColor: err ? "#c00" : "#0d0d0d" }}
+          onChange={(e) => { setPw(e.target.value); setErr(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        />
+        {err && <div style={gateStyles.err}>비밀번호가 올바르지 않습니다</div>}
+        <div style={{ display: "flex", gap: 9, marginTop: 14 }}>
+          <button style={{ ...S.btnPrimary, flex: 1 }} onClick={submit}>확인</button>
+          <button style={{ ...S.btnGhost, flex: 1 }} onClick={onCancel}>취소</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+const adminGateStyles = {
+  card: { background:"#fff", width:320, border:`2px solid ${INK}`, padding:"28px 24px", textAlign:"center" },
+  title: { fontSize:16, fontWeight:800, letterSpacing:"0.02em" },
+  sub: { fontSize:12.5, color:"#8c8c8c", marginTop:8, marginBottom:20, lineHeight:1.5 },
+  input: { width:"100%", border:"1px solid", padding:"11px 13px", fontSize:14, letterSpacing:"0.05em", outline:"none", textAlign:"center" },
+};
+
+// ══════════════════════════════════════════════════════════════
 // Main App
 // ══════════════════════════════════════════════════════════════
 function App() {
@@ -97,6 +135,26 @@ function App() {
   const [modal, setModal] = useState(null); // null | {mode:'view'|'new'|'edit', posting}
   const [toast, setToast] = useState("");
   const rowRef = useRef(null);
+
+  // ── 관리자 권한 (등록·수정·삭제 전용) ─────────────────────────
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminGateOpen, setAdminGateOpen] = useState(false);
+  const pendingActionRef = useRef(null);
+
+  const requireAdmin = useCallback((action) => {
+    if (isAdmin) { action(); return; }
+    pendingActionRef.current = action;
+    setAdminGateOpen(true);
+  }, [isAdmin]);
+
+  const handleAdminSuccess = () => {
+    setIsAdmin(true);
+    setAdminGateOpen(false);
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    if (action) action();
+  };
+  const handleAdminCancel = () => { setAdminGateOpen(false); pendingActionRef.current = null; };
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(""), 1800); };
 
@@ -172,6 +230,7 @@ function App() {
         <span style={S.syncTag}>
           <span style={{ ...S.syncDot, background: syncState === "live" ? "#3ba55d" : syncState === "error" ? "#c00" : "#c3a300" }} />
           {syncState === "live" ? "실시간 연결됨" : syncState === "error" ? "연결 오류" : "연결 중…"}
+          {isAdmin && <span style={S.adminBadge}>관리자</span>}
         </span>
       </div>
 
@@ -189,7 +248,7 @@ function App() {
               공고 목록 {selectedDate ? `— ${fmtDate(selectedDate)}` : ""}
               {selectedDate && <button style={S.clearFilter} onClick={() => setSelectedDate(null)}>전체보기 ✕</button>}
             </h2>
-            <button style={S.addBtn} onClick={() => setModal({ mode: "new" })}>+ 공고 등록</button>
+            <button style={S.addBtn} onClick={() => requireAdmin(() => setModal({ mode: "new" }))}>+ 공고 등록</button>
           </div>
 
           <PostingTable
@@ -203,8 +262,8 @@ function App() {
         <PostingDetail
           posting={modal.posting}
           onClose={() => setModal(null)}
-          onEdit={() => setModal({ mode: "edit", posting: modal.posting })}
-          onDelete={deletePosting}
+          onEdit={() => requireAdmin(() => setModal({ mode: "edit", posting: modal.posting }))}
+          onDelete={(id) => requireAdmin(() => deletePosting(id))}
         />
       )}
 
@@ -213,9 +272,11 @@ function App() {
           mode={modal.mode} posting={modal.posting}
           onClose={() => setModal(null)}
           onSave={savePosting}
-          onDelete={deletePosting}
+          onDelete={(id) => requireAdmin(() => deletePosting(id))}
         />
       )}
+
+      {adminGateOpen && <AdminGate onSuccess={handleAdminSuccess} onCancel={handleAdminCancel} />}
 
       {toast && <div style={S.toast}>{toast}</div>}
     </div>
@@ -368,33 +429,29 @@ function PostingTable({ postings, onOpen }) {
 function PostingDetail({ posting, onClose, onEdit, onDelete }) {
   const boxRef = useRef(null);
   const textRef = useRef(null);
-  const [fitSize, setFitSize] = useState(18);
-  const [fitCols, setFitCols] = useState(1);
-  const [overflowFallback, setOverflowFallback] = useState(false);
+  const [scale, setScale] = useState(1);
 
   useLayoutEffect(() => {
     if (!posting) return;
     const box = boxRef.current, text = textRef.current;
     if (!box || !text) return;
-    const MAX = 18, MIN = 9, MAX_COLS = 4;
-    let fits = false, chosenCols = 1, chosenSize = MIN;
 
-    for (let cols = 1; cols <= MAX_COLS && !fits; cols++) {
-      text.style.columnCount = String(cols);
-      for (let size = MAX; size >= MIN; size--) {
-        text.style.fontSize = size + "px";
-        if (text.scrollHeight <= box.clientHeight) {
-          fits = true; chosenCols = cols; chosenSize = size;
-          break;
-        }
-      }
+    const computeFit = () => {
+      // 고정 폭(px)으로 자연스러운 줄바꿈 높이를 먼저 측정한 뒤,
+      // 그 결과를 통째로 scale()로 축소해서 박스 안에 강제로 맞춘다 (레이아웃 재계산 없이 100% 확정적으로 fit).
+      text.style.transform = "none";
+      text.style.width = box.clientWidth + "px";
+      text.style.fontSize = "17px";
+      const naturalH = text.scrollHeight;
+      const s = naturalH > 0 ? Math.min(1, box.clientHeight / naturalH) : 1;
+      setScale(s);
+    };
+
+    computeFit();
+    // 웹폰트가 늦게 로드되면 줄바꿈이 달라져 처음 측정값이 틀어질 수 있어 폰트 로딩 완료 후 다시 계산
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(computeFit).catch(() => {});
     }
-    if (!fits) { chosenCols = MAX_COLS; chosenSize = MIN; text.style.columnCount = String(MAX_COLS); text.style.fontSize = MIN + "px"; }
-
-    setFitCols(chosenCols);
-    setFitSize(chosenSize);
-    // 이론상 도달하지 않지만, 극단적으로 긴 글에 한해 내용 유실을 막기 위한 최후의 안전장치
-    setOverflowFallback(!fits);
   }, [posting]);
 
   if (!posting) return null;
@@ -460,8 +517,8 @@ function PostingDetail({ posting, onClose, onEdit, onDelete }) {
           <main style={S.detailMain}>
             <h2 style={S.detailTitle}>{posting.title}</h2>
             {posting.description ? (
-              <div ref={boxRef} style={{ ...S.detailContentBox, overflowY: overflowFallback ? "auto" : "hidden" }}>
-                <div ref={textRef} style={{ ...S.detailContent, fontSize: fitSize, columnCount: fitCols, columnGap: 28 }}>{posting.description}</div>
+              <div ref={boxRef} style={S.detailContentBox}>
+                <div ref={textRef} style={{ ...S.detailContent, fontSize: 17, width: "100%", transform: `scale(${scale})`, transformOrigin: "top left" }}>{posting.description}</div>
               </div>
             ) : (
               <p style={S.detailEmpty}>등록된 상세 내용이 없어요.</p>
@@ -622,6 +679,7 @@ const S = {
   brand: { fontSize:19, fontWeight:800, letterSpacing:"0.08em" },
   syncTag: { marginLeft:"auto", fontSize:10.5, color:"#8c8c8c", display:"flex", alignItems:"center", gap:6, textTransform:"uppercase", letterSpacing:"0.06em" },
   syncDot: { width:6, height:6, borderRadius:"50%", flexShrink:0 },
+  adminBadge: { marginLeft:8, background:INK, color:"#fff", padding:"2px 7px", fontSize:9.5, fontWeight:800, letterSpacing:"0.04em" },
 
   sec: { fontSize:12, textTransform:"uppercase", letterSpacing:"0.14em", fontWeight:800, margin:0, fontFamily:"'JetBrains Mono',monospace", display:"flex", alignItems:"center", gap:10 },
   listHeadRow: { display:"flex", alignItems:"center", justifyContent:"space-between", margin:"30px 0 14px", borderBottom:`1px solid #e6e6e6`, paddingBottom:10, flexWrap:"wrap", gap:10 },
