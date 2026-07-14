@@ -96,7 +96,7 @@ function AdminGate({ onSuccess, onCancel }) {
     else { setErr(true); setPw(""); }
   };
   return (
-    <div style={S.detailOverlay} onClick={onCancel}>
+    <div style={adminGateStyles.overlay} onClick={onCancel}>
       <div style={adminGateStyles.card} onClick={(e) => e.stopPropagation()}>
         <div style={adminGateStyles.title}>관리자 권한 확인</div>
         <div style={adminGateStyles.sub}>공고 등록·수정·삭제는 관리자 비밀번호가 필요해요.</div>
@@ -116,7 +116,8 @@ function AdminGate({ onSuccess, onCancel }) {
   );
 }
 const adminGateStyles = {
-  card: { background:"#fff", width:320, border:`2px solid ${INK}`, padding:"28px 24px", textAlign:"center" },
+  overlay: { position:"fixed", inset:0, background:"rgba(13,13,13,0.6)", zIndex:50, display:"flex", alignItems:"center", justifyContent:"center", padding:"24px" },
+  card: { background:"#fff", width:320, border:"2px solid #0d0d0d", padding:"28px 24px", textAlign:"center" },
   title: { fontSize:16, fontWeight:800, letterSpacing:"0.02em" },
   sub: { fontSize:12.5, color:"#8c8c8c", marginTop:8, marginBottom:20, lineHeight:1.5 },
   input: { width:"100%", border:"1px solid", padding:"11px 13px", fontSize:14, letterSpacing:"0.05em", outline:"none", textAlign:"center" },
@@ -427,33 +428,6 @@ function PostingTable({ postings, onOpen }) {
 // Detail (읽기 모드)
 // ══════════════════════════════════════════════════════════════
 function PostingDetail({ posting, onClose, onEdit, onDelete }) {
-  const boxRef = useRef(null);
-  const textRef = useRef(null);
-  const [scale, setScale] = useState(1);
-
-  useLayoutEffect(() => {
-    if (!posting) return;
-    const box = boxRef.current, text = textRef.current;
-    if (!box || !text) return;
-
-    const computeFit = () => {
-      // 고정 폭(px)으로 자연스러운 줄바꿈 높이를 먼저 측정한 뒤,
-      // 그 결과를 통째로 scale()로 축소해서 박스 안에 강제로 맞춘다 (레이아웃 재계산 없이 100% 확정적으로 fit).
-      text.style.transform = "none";
-      text.style.width = box.clientWidth + "px";
-      text.style.fontSize = "17px";
-      const naturalH = text.scrollHeight;
-      const s = naturalH > 0 ? Math.min(1, box.clientHeight / naturalH) : 1;
-      setScale(s);
-    };
-
-    computeFit();
-    // 웹폰트가 늦게 로드되면 줄바꿈이 달라져 처음 측정값이 틀어질 수 있어 폰트 로딩 완료 후 다시 계산
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(computeFit).catch(() => {});
-    }
-  }, [posting]);
-
   if (!posting) return null;
   const fmtSize = (b) => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + "MB" : Math.round(b / 1024) + "KB";
 
@@ -473,57 +447,46 @@ function PostingDetail({ posting, onClose, onEdit, onDelete }) {
     } catch { window.open(posting.fileData, "_blank"); }
   };
 
+  const Row = ({ label, children }) => (
+    <div style={S.dtRow}>
+      <div style={S.dtLabel}>{label}</div>
+      <div style={S.dtValue}>{children}</div>
+    </div>
+  );
+
   return (
     <div style={S.detailOverlay} onClick={onClose}>
       <div style={S.detailCard} onClick={(e) => e.stopPropagation()}>
-        <button style={S.detailClose} onClick={onClose}>✕ 닫기</button>
+        <div style={S.detailCardHead}>
+          <h2 style={S.detailTitle}>{posting.title}</h2>
+          <button style={S.detailClose} onClick={onClose}>✕ 닫기</button>
+        </div>
 
-        <div className="app-detail-grid">
-          <aside style={S.detailAside}>
-            <div style={S.detailTags}>
-              {posting.company && <span style={S.rcat}>{posting.company}</span>}
-              {(posting.jobTypes || []).map((t) => <span key={t} style={S.rtag}>{t}</span>)}
-            </div>
+        <div style={S.dtTable}>
+          <Row label="회사명">{posting.company || "-"}</Row>
+          <Row label="채용구분">{(posting.jobTypes || []).length ? posting.jobTypes.join(", ") : "-"}</Row>
+          <Row label="등록일">{fmtDate(posting.postedAt)}</Row>
+          <Row label="마감일">{posting.deadlineAt ? fmtDate(posting.deadlineAt) : "-"}</Row>
+          {posting.fileName && (
+            <Row label="첨부파일">
+              <span style={{ fontWeight: 700 }}>{posting.fileName}</span>
+              <span style={{ color: "#8c8c8c", marginLeft: 8, fontSize: 12.5 }}>{fmtSize(posting.fileSize)}</span>
+              <button style={{ ...S.fileActionBtn, marginLeft: 10 }} onClick={downloadFile}>받기</button>
+            </Row>
+          )}
+        </div>
 
-            <div style={S.detailAsideBlock}>
-              <div style={S.rlabel}>등록일시</div>
-              <div style={S.detailAsideValue}>{fmtDate(posting.postedAt)}</div>
-            </div>
+        <div style={S.dtSectionBar}>공고 내용</div>
+        {posting.description ? (
+          <div style={S.detailContent}>{posting.description}</div>
+        ) : (
+          <p style={S.detailEmpty}>등록된 상세 내용이 없어요.</p>
+        )}
 
-            {posting.deadlineAt && (
-              <div style={S.detailAsideBlock}>
-                <div style={S.rlabel}>마감일시</div>
-                <div style={S.detailAsideValue}>{fmtDate(posting.deadlineAt)}</div>
-              </div>
-            )}
-
-            {posting.fileName && (
-              <div style={S.detailAsideBlock}>
-                <div style={S.rlabel}>지원서 첨부</div>
-                <div style={S.detailFileBox}>
-                  <div style={{ fontWeight: 700, wordBreak: "break-all", fontSize: 13 }}>{posting.fileName}</div>
-                  <div style={{ color: "#8c8c8c", fontSize: 11.5, marginTop: 2 }}>{fmtSize(posting.fileSize)}</div>
-                  <button style={{ ...S.fileActionBtn, marginTop: 8, width: "100%" }} onClick={downloadFile}>받기</button>
-                </div>
-              </div>
-            )}
-
-            <div style={S.detailAsideActions}>
-              <button style={S.btnPrimary} onClick={onEdit}>수정</button>
-              <button style={S.btnDanger} onClick={() => { if (window.confirm("이 공고를 삭제할까요?")) onDelete(posting.id); }}>삭제</button>
-            </div>
-          </aside>
-
-          <main style={S.detailMain}>
-            <h2 style={S.detailTitle}>{posting.title}</h2>
-            {posting.description ? (
-              <div ref={boxRef} style={S.detailContentBox}>
-                <div ref={textRef} style={{ ...S.detailContent, fontSize: 17, width: "100%", transform: `scale(${scale})`, transformOrigin: "top left" }}>{posting.description}</div>
-              </div>
-            ) : (
-              <p style={S.detailEmpty}>등록된 상세 내용이 없어요.</p>
-            )}
-          </main>
+        <div style={S.modalFoot}>
+          <button style={S.btnPrimary} onClick={onEdit}>수정</button>
+          <button style={S.btnDanger} onClick={() => { if (window.confirm("이 공고를 삭제할까요?")) onDelete(posting.id); }}>삭제</button>
+          <button style={S.btnGhost} onClick={onClose}>닫기</button>
         </div>
       </div>
     </div>
@@ -663,11 +626,6 @@ const globalCss = `
   * { box-sizing:border-box; font-family:'Pretendard Variable','Pretendard',-apple-system,'Apple SD Gothic Neo',sans-serif !important; }
   ::placeholder { color:#b0b0b0; }
   @media (prefers-reduced-motion: reduce){ * { animation:none !important; transition:none !important; } }
-
-  .app-detail-grid { display:grid; grid-template-columns: 240px 1fr; gap: 40px; align-items: stretch; height: 100%; }
-  @media (max-width: 760px) {
-    .app-detail-grid { grid-template-columns: 1fr; gap: 24px; height: auto; }
-  }
 `;
 
 const ACCENT = "#c3d9f3";
@@ -736,22 +694,20 @@ const S = {
   rlabel: { fontSize:11, fontWeight:800, textTransform:"uppercase", letterSpacing:"0.06em", color:"#8c8c8c", marginBottom:6, fontFamily:"'JetBrains Mono',monospace" },
   rvalue: { fontSize:14.5, lineHeight:1.65, whiteSpace:"pre-wrap", wordBreak:"break-word", fontFamily:"'Cormorant Garamond',serif" },
 
-  // Detail (읽기 모드) — wide, page-filling layout
-  detailOverlay: { position:"fixed", inset:0, background:"rgba(13,13,13,0.6)", zIndex:40, display:"flex", alignItems:"center", justifyContent:"center", padding:"24px" },
-  detailCard: { background:"#fff", width:"min(1200px, 97vw)", height:"min(800px, 94vh)", border:`2px solid ${INK}`, position:"relative", padding:"44px 40px 28px", overflow:"hidden" },
-  detailClose: { position:"absolute", top:18, right:18, background:"none", border:`1px solid ${INK}`, padding:"5px 12px", fontSize:11.5, fontWeight:700, cursor:"pointer", letterSpacing:"0.03em" },
+  // Detail (읽기 모드) — natural-flow document, whole card scrolls like a normal page
+  detailOverlay: { position:"fixed", inset:0, background:"rgba(13,13,13,0.6)", zIndex:40, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"32px 16px", overflowY:"auto" },
+  detailCard: { background:"#fff", width:"min(880px, 96vw)", border:`2px solid ${INK}`, padding:"32px 32px 8px", marginBottom:40 },
+  detailCardHead: { display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16, marginBottom:20 },
+  detailClose: { flexShrink:0, background:"none", border:`1px solid ${INK}`, padding:"6px 12px", fontSize:11.5, fontWeight:700, cursor:"pointer", letterSpacing:"0.03em" },
+  detailTitle: { fontSize:23, fontWeight:800, letterSpacing:"-0.02em", lineHeight:1.3, margin:0 },
 
-  detailAside: { display:"flex", flexDirection:"column", gap:20, borderRight:`1px solid #e6e6e6`, paddingRight:28, overflowY:"auto" },
-  detailTags: { display:"flex", flexWrap:"wrap", gap:6 },
-  detailAsideBlock: {},
-  detailAsideValue: { fontSize:14, fontWeight:700, marginTop:3 },
-  detailFileBox: { border:"1px solid #e6e6e6", borderLeft:`3px solid ${INK}`, padding:"10px 12px", marginTop:3 },
-  detailAsideActions: { display:"flex", flexDirection:"column", gap:8, marginTop:"auto", paddingTop:16 },
+  dtTable: { border:`1px solid ${INK}` },
+  dtRow: { display:"flex", borderTop:`1px solid #e6e6e6` },
+  dtLabel: { flex:"0 0 120px", background:"#f7f7f7", fontWeight:700, fontSize:13, padding:"12px 14px", borderRight:"1px solid #e6e6e6" },
+  dtValue: { flex:1, fontSize:13.5, padding:"12px 14px", display:"flex", alignItems:"center", flexWrap:"wrap" },
+  dtSectionBar: { background:"#f0f0f0", textAlign:"center", fontWeight:800, fontSize:13, padding:"10px 0", margin:"24px 0 20px", letterSpacing:"0.04em" },
 
-  detailMain: { minWidth:0, height:"100%", display:"flex", flexDirection:"column" },
-  detailTitle: { fontSize:26, fontWeight:800, letterSpacing:"-0.02em", lineHeight:1.25, margin:"0 0 20px", flexShrink:0 },
-  detailContentBox: { flex:1, minHeight:0, overflow:"hidden" },
-  detailContent: { lineHeight:1.85, whiteSpace:"pre-wrap", wordBreak:"break-word", color:"#1a1a1a" },
+  detailContent: { fontSize:15, lineHeight:1.85, whiteSpace:"pre-wrap", wordBreak:"break-word", color:"#1a1a1a", paddingBottom:8 },
   detailEmpty: { fontSize:14, color:"#8c8c8c", fontStyle:"italic" },
 
   label: { display:"block", fontSize:11.5, fontWeight:800, margin:"16px 0 6px", letterSpacing:"0.04em", textTransform:"uppercase", fontFamily:"'JetBrains Mono',monospace" },
