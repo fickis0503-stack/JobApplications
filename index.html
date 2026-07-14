@@ -369,22 +369,32 @@ function PostingDetail({ posting, onClose, onEdit, onDelete }) {
   const boxRef = useRef(null);
   const textRef = useRef(null);
   const [fitSize, setFitSize] = useState(18);
+  const [fitCols, setFitCols] = useState(1);
   const [overflowFallback, setOverflowFallback] = useState(false);
 
   useLayoutEffect(() => {
     if (!posting) return;
     const box = boxRef.current, text = textRef.current;
     if (!box || !text) return;
-    const MAX = 18, MIN = 11;
-    let size = MAX;
-    text.style.fontSize = size + "px";
-    while (text.scrollHeight > box.clientHeight && size > MIN) {
-      size -= 1;
-      text.style.fontSize = size + "px";
+    const MAX = 18, MIN = 9, MAX_COLS = 4;
+    let fits = false, chosenCols = 1, chosenSize = MIN;
+
+    for (let cols = 1; cols <= MAX_COLS && !fits; cols++) {
+      text.style.columnCount = String(cols);
+      for (let size = MAX; size >= MIN; size--) {
+        text.style.fontSize = size + "px";
+        if (text.scrollHeight <= box.clientHeight) {
+          fits = true; chosenCols = cols; chosenSize = size;
+          break;
+        }
+      }
     }
-    setFitSize(size);
-    // 그래도 안 들어가면(아주 긴 글) 최소 크기에서 스크롤을 허용해 내용 유실 방지
-    setOverflowFallback(text.scrollHeight > box.clientHeight);
+    if (!fits) { chosenCols = MAX_COLS; chosenSize = MIN; text.style.columnCount = String(MAX_COLS); text.style.fontSize = MIN + "px"; }
+
+    setFitCols(chosenCols);
+    setFitSize(chosenSize);
+    // 이론상 도달하지 않지만, 극단적으로 긴 글에 한해 내용 유실을 막기 위한 최후의 안전장치
+    setOverflowFallback(!fits);
   }, [posting]);
 
   if (!posting) return null;
@@ -451,7 +461,7 @@ function PostingDetail({ posting, onClose, onEdit, onDelete }) {
             <h2 style={S.detailTitle}>{posting.title}</h2>
             {posting.description ? (
               <div ref={boxRef} style={{ ...S.detailContentBox, overflowY: overflowFallback ? "auto" : "hidden" }}>
-                <div ref={textRef} style={{ ...S.detailContent, fontSize: fitSize }}>{posting.description}</div>
+                <div ref={textRef} style={{ ...S.detailContent, fontSize: fitSize, columnCount: fitCols, columnGap: 28 }}>{posting.description}</div>
               </div>
             ) : (
               <p style={S.detailEmpty}>등록된 상세 내용이 없어요.</p>
@@ -670,7 +680,7 @@ const S = {
 
   // Detail (읽기 모드) — wide, page-filling layout
   detailOverlay: { position:"fixed", inset:0, background:"rgba(13,13,13,0.6)", zIndex:40, display:"flex", alignItems:"center", justifyContent:"center", padding:"24px" },
-  detailCard: { background:"#fff", width:"min(1080px, 95vw)", height:"min(720px, 90vh)", border:`2px solid ${INK}`, position:"relative", padding:"48px 44px 32px", overflow:"hidden" },
+  detailCard: { background:"#fff", width:"min(1200px, 97vw)", height:"min(800px, 94vh)", border:`2px solid ${INK}`, position:"relative", padding:"44px 40px 28px", overflow:"hidden" },
   detailClose: { position:"absolute", top:18, right:18, background:"none", border:`1px solid ${INK}`, padding:"5px 12px", fontSize:11.5, fontWeight:700, cursor:"pointer", letterSpacing:"0.03em" },
 
   detailAside: { display:"flex", flexDirection:"column", gap:20, borderRight:`1px solid #e6e6e6`, paddingRight:28, overflowY:"auto" },
